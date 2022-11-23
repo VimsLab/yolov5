@@ -17,3 +17,4 @@ test: val/  # val images (relative to 'path') 5000 images
 nc: 2  # number of classes
 names: ['fovea', 'SCR']  # class names
 
+
