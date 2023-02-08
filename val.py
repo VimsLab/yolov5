@@ -5,7 +5,8 @@ Validate a trained YOLOv5 detection model on a detection dataset
 Usage:
     $ python val.py --weights yolov5s.pt --data coco128.yaml --img 640
 
-python val.py --data data/varscr.yaml --device=cuda:1 --batch 29 --weights runs/train/exp_with_3channels_train/weights/best.pt --img 576 --conf-thres 0.1 --iou-thres 1.0 --r 2 --space 1
+python train.py --img 576 --hyp data/hyps/hyp.src.yaml --batch 64 --epoch 500 --data data/scr.yaml --device cuda:0 --weights yolov5s.pt --cache --r 3 --space 1
+python val.py --data data/scr.yaml --device=cuda:1 --batch 128 --weights runs/train/exp7/weights/best.pt --img 576 --conf-thres 0.001 --iou-thres 0.2 --r 3 --space 1
 
 Usage - formats:
     $ python val.py --weights yolov5s.pt                 # PyTorch
@@ -26,6 +27,8 @@ import json
 import os
 import sys
 from pathlib import Path
+import cv2
+from matplotlib import pyplot as plt
 
 import numpy as np
 import torch
@@ -39,7 +42,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
-from utils.dataloaders import create_dataloader
+from utils.dataloader_mid import create_dataloader
 from utils.general import (LOGGER, Profile, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_boxes, xywh2xyxy, xyxy2xywh)
@@ -133,6 +136,7 @@ def run(
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
+        print('****', conf_thres, iou_thres, '******')
         device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
         half &= device.type != 'cpu'  # half precision only supported on CUDA
         model.half() if half else model.float()
@@ -183,7 +187,7 @@ def run(
                                        rect=rect,
                                        workers=workers,
                                        prefix=colorstr(f'{task}: '),
-                                       phase='direct_val',
+                                       phase='val',
                                        r=opt.r,
                                        space=opt.space)[0]
 
@@ -200,20 +204,64 @@ def run(
     jdict, stats, ap, ap_class = [], [], [], []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-    for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-
+    for batch_i, (im, targets, paths, indexvalue, shapes) in enumerate(pbar):
         callbacks.run('on_val_batch_start')
+        
         with dt[0]:
             if cuda:
-                im = im.to(device, non_blocking=True)
-                targets = targets.to(device)
+
+                im = im.to(device)
+                tar = []
+                
+                for i in range(len(im)):
+                    t = targets[targets[:,0] == i]
+                    t = t[t[:,1] == indexvalue[i]]
+
+                    
+                    if len(t)>0:
+                        # print(t, t.shape)
+                        tar.append(t)
+
+                if len(tar)>0:
+                    targets = torch.concat(tar, 0)
+                else:
+                    targets = torch.empty((0, targets.shape[-1]))
+               
+                
             im = im.half() if half else im.float()  # uint8 to fp16/32
             im /= 255  # 0 - 255 to 0.0 - 1.0
             nb, _, height, width = im.shape  # batch size, channels, height, width
 
+        targets = torch.from_numpy(np.delete(targets.numpy().copy(), 1, 1)).to(device)
+        # print(targets.shape)
         # Inference
         with dt[1]:
             preds, train_out = model(im) if compute_loss else (model(im, augment=augment), None)
+
+
+        # # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+
+
+        # for k in range(len(im)):
+
+        #     imk = im[k].clone().cpu()
+        #     plt.imshow(imk.permute(1,2,0)*255)
+        #     plt.savefig('bugtest_dataloader/'+str(batch_i)+'_'+str(k)+'.png')
+
+        #     for abc, imgk in enumerate(imk):
+        #         imgk = torch.stack([imgk,imgk,imgk],0)
+        #         imgk=255*imgk.permute(1,2,0)
+        #         plt.imshow(imgk)
+        #         plt.savefig('bugtest_dataloader/'+str(batch_i)+'_'+str(k)+'_' + str(abc) + '.png')
+        #         plt.show()
+        # break
+
+        # # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+        
+        im = im[:,1]
+        im = torch.stack([im,im,im],1)
 
         # Loss
         if compute_loss:
@@ -240,6 +288,8 @@ def run(
             path, shape = Path(paths[0]), shapes[0][0]
             correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
             seen += 1
+
+
 
             if npr == 0:
                 if nl:

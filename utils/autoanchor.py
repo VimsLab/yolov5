@@ -26,13 +26,15 @@ def check_anchor_order(m):
         m.anchors[:] = m.anchors.flip(0)
 
 
-@TryExcept(f'{PREFIX}ERROR')
+# @TryExcept(f'{PREFIX}ERROR')
 def check_anchors(dataset, model, thr=4.0, imgsz=640):
     # Check anchor fit to data, recompute if necessary
     m = model.module.model[-1] if hasattr(model, 'module') else model.model[-1]  # Detect()
     shapes = imgsz * dataset.shapes / dataset.shapes.max(1, keepdims=True)
     scale = np.random.uniform(0.9, 1.1, size=(shapes.shape[0], 1))  # augment scale
-    wh = torch.tensor(np.concatenate([l[:, 3:5] * s for s, l in zip(shapes * scale, dataset.labels)])).float()  # wh
+    print(dataset.lo[0])
+    print(dataset.lo[0][:,5:])
+    wh = torch.tensor(np.concatenate([l[:, 5:] * s for s, l in zip(shapes * scale, dataset.lo) if l[0][2]<2 ] )).float()  # wh
 
     def metric(k):  # compute metric
         r = wh[:, None] / k[None]
@@ -112,12 +114,12 @@ def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen
     if isinstance(dataset, str):  # *.yaml file
         with open(dataset, errors='ignore') as f:
             data_dict = yaml.safe_load(f)  # model dict
-        from utils.dataloaders import LoadImagesAndLabels
+        from utils.dataloader_mid import LoadImagesAndLabels
         dataset = LoadImagesAndLabels(data_dict['train'], augment=True, rect=True)
 
     # Get label wh
     shapes = img_size * dataset.shapes / dataset.shapes.max(1, keepdims=True)
-    wh0 = np.concatenate([l[:, 3:5] * s for s, l in zip(shapes, dataset.labels)])  # wh
+    wh0 = np.concatenate([l[:, 5:] * s for s, l in zip(shapes, dataset.lo) if l[0][2]<2])  # wh
 
     # Filter
     i = (wh0 < 3.0).any(1).sum()

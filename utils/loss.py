@@ -232,6 +232,8 @@ class ComputeLoss:
             # print('Layer', i+1, shape)
             gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
 
+            # print('********', targets.shape, gain.shape)
+
             # Match targets to anchors
             t = targets * gain  # shape(3,n,7)
             if nt:

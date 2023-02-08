@@ -686,7 +686,7 @@ def labels_to_class_weights(labels, nc=80):
 
     # labels = np.concatenate(labels, 0)  # labels.shape = (866643, 5) for COCO
     classes = [l for sublist in labels for l in sublist] #labels[:, 0].astype(int)  # labels = [class xywh]
-    classes = [l for sublist in classes for l in sublist]
+    # classes = [l for sublist in classes for l in sublist]
     weights = np.bincount(classes, minlength=nc)  # occurrences per class
 
     # Prepend gridpoint count (for uCE training)
@@ -888,7 +888,7 @@ def non_max_suppression(
     # min_wh = 2  # (pixels) minimum box width and height
     max_wh = 7680  # (pixels) maximum box width and height
     max_nms = 30000  # maximum number of boxes into torchvision.ops.nms()
-    time_limit = 0.5 + 0.05 * bs  # seconds to quit after
+    time_limit = 0.5 + 0.5 * bs  # seconds to quit after
     redundant = True  # require redundant detections
     multi_label &= nc > 1  # multiple labels per box (adds 0.5ms/img)
     merge = False  # use merge-NMS
