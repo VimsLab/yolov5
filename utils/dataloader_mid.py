@@ -145,7 +145,7 @@ def create_dataloader(path,
             image_weights=image_weights,
             phase=phase,
             prefix=prefix,
-            r=r, 
+            r=r,
             space=space)
 
     batch_size = min(batch_size, len(dataset))
@@ -460,7 +460,7 @@ class LoadImagesAndLabels(Dataset):
                  pad=0.0,
                  min_items=0,
                  prefix='',
-                 phase='val', 
+                 phase='val',
                  r=3,
                  space=1):
         self.img_size = img_size
@@ -495,30 +495,32 @@ class LoadImagesAndLabels(Dataset):
                     raise FileNotFoundError(f'{prefix}{p} does not exist')
             self.im_files = [x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in ['pkl']]
             random.shuffle(self.im_files)
-           
+
             assert self.im_files, f'{prefix}No images found'
         except Exception as e:
             raise Exception(f'{prefix}Error loading data from {path}: {e}\n{HELP_URL}') from e
 
-        
-        cache_path = (p if p.is_file() else Path(self.im_files[0]).parent).with_suffix('.cache')
 
-        
+        cache_path = (p if p.is_file() else Path(self.im_files[0]).parent).with_suffix('.cache')
+        cache_path = cache_path.with_name('yolo_'+cache_path.name)
+
         try:
             print('Loading images and labels...')
             t = datetime.now()
             cache, exists = np.load(cache_path, allow_pickle=True).item(), True
             assert cache['version'] == self.cache_version  # matches current version
-            assert cache['hash'] == get_hash(self.im_files)  # identical hash
+            # assert cache['hash'] == get_hash(self.im_files)  # identical hash
+            print(cache_path)
+            assert cache_path.is_file()
         except Exception as e:
             print('\nCreating a new cache file for images and labels because it does not exist....\n')
             cache, exists = self.cache_labels(cache_path, prefix), False  # run cache ops
-        
+
         print('Time taken:', datetime.now()-t)
 
         nf, nm, ne, nc, n = cache.pop('results')  # found, missing, empty, corrupt, total
         if exists and LOCAL_RANK in {-1, 0}:
-            d = f"Scanning '{cache_path}' images and labels... {nf} found, {nm} missing, {ne} empty, {nc} corrupt"
+            d = f"line  522: Scanning '{cache_path}' images and labels... {nf} found, {nm} missing, {ne} empty, {nc} corrupt"
             tqdm(None, desc=prefix + d, total=n, initial=n, bar_format=BAR_FORMAT)  # display cache results
             if cache['msgs']:
                 LOGGER.info('\n'.join(cache['msgs']))  # display warnings
@@ -527,24 +529,31 @@ class LoadImagesAndLabels(Dataset):
         # Read cache
         [cache.pop(k) for k in ('hash', 'version', 'msgs')]  # remove items
         imgs, box, classes, shapes = zip(*cache.values())
-        
+
         self.box = box
         self.imgs = imgs
         self.classes = classes #np.array(shapes)
         self.shapes = np.array(shapes)
-        self.im_files = list(cache.keys())  # update
+        # self.im_files = list(cache.keys())  # update
+        im_files = list(cache.keys())  # update
 
 
-        n = len(self.im_files)  # number of images
+        # n = len(self.im_files)  # number of images
+        n = len(im_files)
+        self.labels_out, self.indices = self.create_labelout(n)
+        self.n = len(self.indices)
+        self.im_files = [im_files[i] for i in self.indices]
+
+
         bi = np.floor(np.arange(n) / batch_size).astype(int)  # batch index
         nb = bi[-1] + 1  # number of batches
         self.batch = bi  # batch index of image
-        self.n = n
-        self.indices = range(n)
+        # self.n = n
+        # self.indices = range(n)
 
         par = Path(self.im_files[0]).parent
-        sar = par.name + 'filename'
-        car = par.name + 'index'
+        sar = 'yolo_' + par.name + 'filename'
+        car = 'yolo_' + par.name + 'index'
         filecache_path = (par.parent/sar).with_suffix('.cache')
         indexcache_path = (par.parent/car).with_suffix('.cache')
         c_file, c_index = self.cache_files(filecache_path, indexcache_path)
@@ -552,20 +561,20 @@ class LoadImagesAndLabels(Dataset):
         self.roots = c_file
         self.c_index = c_index
 
-        self.labels_out = self.create_labelout()
-
+        # self.labels_out = self.create_labelout()
 
 
         self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(int) * stride
 
-        
-       
+
+
 
 
     def cache_labels(self, path=Path('./labels.cache'), prefix=''):
         # Cache dataset labels, check images and read shapes
         x = {}  # dict
         nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
+        prefix='fxn cache_labels() line 570 '
         desc = f"{prefix}Scanning '{path.parent / path.stem}' images and labels..."
 
         with Pool(NUM_THREADS) as pool:
@@ -584,7 +593,7 @@ class LoadImagesAndLabels(Dataset):
                 if msg:
                     msgs.append(msg)
                 pbar.desc = f"{desc}{nf} found, {nm} missing, {ne} empty, {nc} corrupt"
-                
+
 
         pbar.close()
         if msgs:
@@ -627,10 +636,10 @@ class LoadImagesAndLabels(Dataset):
                 files[root] = sorted(files[root])
 
         np.save(p, files)
-        p.with_suffix('.cache.npy').rename(p) 
+        p.with_suffix('.cache.npy').rename(p)
 
         np.save(q, indexfile)
-        q.with_suffix('.cache.npy').rename(q) 
+        q.with_suffix('.cache.npy').rename(q)
 
         return files, indexfile
 
@@ -651,7 +660,7 @@ class LoadImagesAndLabels(Dataset):
                         f"{mem.available / gb:.1f}/{mem.total / gb:.1f}GB available, "
                         f"{'caching images ✅' if cache else 'not caching images ⚠️'}")
         return cache
-    
+
 
 
     def get_roots(self, file):
@@ -661,38 +670,77 @@ class LoadImagesAndLabels(Dataset):
 
 
     def __len__(self):
-        return len(self.im_files)
+        # return len(self.im_files)
+        return self.n
 
 
         # *************************************************************************************************
 
-    def create_labelout(self):
+    # def create_labelout(self):
+    #     r=self.r
+    #     space=self.space
+    #     # [batch_num, index, class, x, y, w, h]
+    #     labels_out = [None]*self.n
+    #     # lo = [None]*self.n
+    #     for index in range(self.n):
+    #         b = self.box[index].copy()
+    #         c = self.classes[index].copy()
+
+    #         b = np.array(b)
+    #         c = np.array(c).reshape((-1,1))
+
+    #         lab = np.concatenate([c, b], axis=-1)
+    #         label = torch.zeros(len(lab), 7)
+    #         label[:,2:] = torch.from_numpy(lab)
+    #         label[:,1] = index
+    #         labels_out[index] = label
+
+
+    #     self.lo = labels_out
+    #     labels_out = torch.from_numpy(np.concatenate(labels_out, axis=0))
+
+    #     return labels_out
+
+
+    def create_labelout(self, n):
         r=self.r
         space=self.space
         # [batch_num, index, class, x, y, w, h]
-        labels_out = [None]*self.n
-        # lo = [None]*self.n
-        for index in range(self.n):
+        labels_out = dict()
+        filtered_index = []
+
+        for index in range(n):
             b = self.box[index].copy()
             c = self.classes[index].copy()
 
             b = np.array(b)
-            c = np.array(c).reshape((-1,1))
+            c = np.array(c)
 
-            lab = np.concatenate([c, b], axis=-1)
-            label = torch.zeros(len(lab), 7)
-            label[:,2:] = torch.from_numpy(lab)
-            label[:,1] = index
-            labels_out[index] = label
+            b = b[c<2]
+            c = c[c<2]
 
-    
-        self.lo = labels_out
-        labels_out = torch.from_numpy(np.concatenate(labels_out, axis=0))
+            if len(c)>0:
+                c = c.reshape((-1,1))
+                filtered_index.append(index)
 
-        return labels_out
+                lab = np.concatenate([c, b], axis=-1)
+                label = torch.zeros(len(lab), 7)
+
+                label[:,2:] = torch.from_numpy(lab)
+                label[:,1] = index
+                labels_out[index] = label
+
+        self.lo = list(labels_out.values())
+        labels_out = torch.from_numpy(np.concatenate(self.lo, axis=0))
+
+        # print(labels_out[0])
+        return labels_out, filtered_index
 
 
     def lookup(self, index):
+
+        if self.r == 1:
+            return [index]
 
         file = self.im_files[index] # index filename
         i, root, tail = self.c_index[file] # filename [index, root, tail]
@@ -724,18 +772,16 @@ class LoadImagesAndLabels(Dataset):
         return neighborhood
 
 
-        
+
     def __getitem__(self,index):
         r=self.r
-        space=self.space  
-        hyp = self.hyp    
+        space=self.space
+        hyp = self.hyp
 
         neighborhood = self.lookup(index)
 
         image = [None]*r
         labels = [None]*r
-
-        
 
         for i, ind in enumerate(neighborhood):
             label = self.lo[ind].clone()
@@ -751,23 +797,28 @@ class LoadImagesAndLabels(Dataset):
             #     plt.show()
             # # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-            label = label[label[:,2]<2]
-            
-            if len(label)>0:
-                labels[i] = label
+            # label = label[label[:,2]<2]
+
+            # if len(label)>0:
+            #     labels[i] = label
+            labels[i] = label
 
         (h0, w0) = self.shapes[index][::-1]
-        
-        image = np.concatenate(image,0)
-        labels = [l for l in labels if l is not None]
 
-        if len(labels)>0:
-            labels = torch.cat(labels,0)
+        image = np.concatenate(image,0)
+        # labels = [l for l in labels if l is not None]
+
+        # if len(labels)>0:
+        #     labels = torch.cat(labels,0)
+
+        if r==1:
+            labels = labels[0]
+
 
         shape = (256, 576)
         h, w = shape
 
-        
+
         image, ratio, pad = letterbox(image.transpose(1,2,0), shape, auto=False, scaleup=self.augment)
         shapes = (h0, w0), ((h / h0, w / w0), pad)
 
@@ -775,7 +826,7 @@ class LoadImagesAndLabels(Dataset):
             image = cv2.merge([image, image, image])
 
         image = torch.from_numpy(np.ascontiguousarray(image).astype(np.float32)).permute(2,0,1)
-        return image, labels, self.im_files[index], index, shapes       
+        return image, labels, self.im_files[index], index, shapes
 
 
     @staticmethod
@@ -784,8 +835,8 @@ class LoadImagesAndLabels(Dataset):
 
         for i, lb in enumerate(label):
             if len(lb)>0:
-                lb[:,0] = i  
-            
+                lb[:,0] = i
+
         label = [l for l in label if len(l)>0]
 
         if len(label)>0:
@@ -806,7 +857,7 @@ class LoadImagesAndLabels(Dataset):
                     im = d['img']
 
             h0, w0 = im.shape[-2:]  # orig hw
-            
+
             return im, (h0, w0) #, box, classes  # im, hw_original, hw_resized
         return self.ims[i], self.im_hw0[i] #, self.box[i], self.classes[i]  # im, hw_original, hw_resized
 
@@ -824,9 +875,9 @@ class LoadImagesAndLabels(Dataset):
         xc, yc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)  # mosaic center x, y
         im, (h, w)= self.load_image(ind)
 
-        indices = random.choices(range(im.shape[0]), k=4)  
+        indices = random.choices(range(im.shape[0]), k=4)
         random.shuffle(indices)
-    
+
 
         for i, index in enumerate(indices):
             img = im[index]
@@ -844,7 +895,7 @@ class LoadImagesAndLabels(Dataset):
                 x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
                 x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
-            
+
             img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
             padw = x1a - x1b
             padh = y1a - y1b
@@ -860,11 +911,11 @@ class LoadImagesAndLabels(Dataset):
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
                 # segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
             labels4.append(labels)
-            
+
         labels4 = np.concatenate(labels4, 0)
         for x in labels4[:, 1:]: #, *segments4):
             np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
-        
+
         segments4 = []
         img4, labels4, segments4 = copy_paste(img4, labels4, segments4, p=self.hyp['copy_paste'])
         img4, labels4 = random_perspective(img4,
@@ -955,8 +1006,8 @@ class LoadImagesAndLabels(Dataset):
 
         return img9, labels9
 
-    
-        
+
+
 
     @staticmethod
     def collate_fn4(batch):
@@ -1058,7 +1109,7 @@ def autosplit(path=DATASETS_DIR / 'coco128/images', weights=(0.9, 0.1, 0.0), ann
 
 def verify_image_label(args):
     im_file, prefix = args
-    
+
     nm, nf, ne, nc, msg, segments = 0, 0, 0, 0, '', []  # number (missing, found, empty, corrupt), message, segments
 
     # try:
@@ -1073,7 +1124,7 @@ def verify_image_label(args):
 
 
 class HUBDatasetStats():
-    
+
     def __init__(self, path='coco128.yaml', autodownload=False):
         # Initialize class
         zipped, data_dir, yaml_path = self._unzip(Path(path))
