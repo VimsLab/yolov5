@@ -106,7 +106,7 @@ def run(
         batch_size=1,  # batch size
         imgsz=640,  # inference size (pixels)
         conf_thres=0.001,  # confidence threshold
-        iou_thres=1.0,  # NMS IoU threshold
+        iou_thres=0.01,  # NMS IoU threshold
         max_det=300,  # maximum detections per image
         task='val',  # train, val, test, speed or study
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
@@ -203,37 +203,37 @@ def run(
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     callbacks.run('on_val_start')
+
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, indexvalue, shapes) in enumerate(pbar):
+       
         callbacks.run('on_val_batch_start')
-        
         with dt[0]:
             if cuda:
 
                 im = im.to(device)
-                tar = []
+                targets = targets.to(device, non_blocking=True)
+                # tar = []
                 
-                for i in range(len(im)):
-                    t = targets[targets[:,0] == i]
-                    t = t[t[:,1] == indexvalue[i]]
+                # for i in range(len(im)):
+                #     t = targets[targets[:,0] == i]
+                #     t = t[t[:,1] == indexvalue[i]]
 
                     
-                    if len(t)>0:
-                        # print(t, t.shape)
-                        tar.append(t)
+                #     if len(t)>0:
+                #         # print(t, t.shape)
+                #         tar.append(t)
 
-                if len(tar)>0:
-                    targets = torch.concat(tar, 0)
-                else:
-                    targets = torch.empty((0, targets.shape[-1]))
+                # if len(tar)>0:
+                #     targets = torch.concat(tar, 0)
+                # else:
+                #     targets = torch.empty((0, targets.shape[-1]))
                
                 
             im = im.half() if half else im.float()  # uint8 to fp16/32
             im /= 255  # 0 - 255 to 0.0 - 1.0
             nb, _, height, width = im.shape  # batch size, channels, height, width
-
-        targets = torch.from_numpy(np.delete(targets.numpy().copy(), 1, 1)).to(device)
-        # print(targets.shape)
+        targets = torch.from_numpy(np.delete(targets.cpu().numpy().copy(), 1, 1)).to(device)
         # Inference
         with dt[1]:
             preds, train_out = model(im) if compute_loss else (model(im, augment=augment), None)
@@ -271,7 +271,6 @@ def run(
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
 
-        # 
         with dt[2]:
             preds = non_max_suppression(preds,
                                         conf_thres,
@@ -283,13 +282,12 @@ def run(
 
         # Metrics
         for si, pred in enumerate(preds):
+            # print(targets[targets[:, 0] == si])
             labels = targets[targets[:, 0] == si, 1:]
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
             path, shape = Path(paths[0]), shapes[0][0]
             correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
             seen += 1
-
-
 
             if npr == 0:
                 if nl:
