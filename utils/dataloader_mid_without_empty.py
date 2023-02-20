@@ -130,7 +130,6 @@ def create_dataloader(path,
         LOGGER.warning('WARNING ⚠️ --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
     print('Image cache =', cache, 'Shuffle = ', shuffle)
-    image_weights = True
     with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
         dataset = LoadImagesAndLabels(
             path,
@@ -510,7 +509,9 @@ class LoadImagesAndLabels(Dataset):
             t = datetime.now()
             cache, exists = np.load(cache_path, allow_pickle=True).item(), True
             assert cache['version'] == self.cache_version  # matches current version
-            assert cache['hash'] == get_hash(self.im_files)  # identical hash
+            # assert cache['hash'] == get_hash(self.im_files)  # identical hash
+            print(cache_path)
+            assert cache_path.is_file()
         except Exception as e:
             print('\nCreating a new cache file for images and labels because it does not exist....\n')
             cache, exists = self.cache_labels(cache_path, prefix), False  # run cache ops
@@ -533,19 +534,26 @@ class LoadImagesAndLabels(Dataset):
         self.imgs = imgs
         self.classes = classes #np.array(shapes)
         self.shapes = np.array(shapes)
-        self.im_files = list(cache.keys())  # update
+        # self.im_files = list(cache.keys())  # update
+        im_files = list(cache.keys())  # update
 
 
-        n = len(self.im_files)  # number of images
+        # n = len(self.im_files)  # number of images
+        n = len(im_files)
+        self.labels_out, self.indices = self.create_labelout(n)
+        self.n = len(self.indices)
+        self.im_files = [im_files[i] for i in self.indices]
+
+
         bi = np.floor(np.arange(n) / batch_size).astype(int)  # batch index
         nb = bi[-1] + 1  # number of batches
         self.batch = bi  # batch index of image
-        self.n = n
-        self.indices = range(n)
+        # self.n = n
+        # self.indices = range(n)
 
         par = Path(self.im_files[0]).parent
-        sar = par.name + 'filename'
-        car = par.name + 'index'
+        sar = 'yolo_' + par.name + 'filename'
+        car = 'yolo_' + par.name + 'index'
         filecache_path = (par.parent/sar).with_suffix('.cache')
         indexcache_path = (par.parent/car).with_suffix('.cache')
         c_file, c_index = self.cache_files(filecache_path, indexcache_path)
@@ -553,8 +561,7 @@ class LoadImagesAndLabels(Dataset):
         self.roots = c_file
         self.c_index = c_index
 
-        self.labels_out = self.create_labelout()
-
+        # self.labels_out = self.create_labelout()
 
 
         self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(int) * stride
@@ -663,35 +670,71 @@ class LoadImagesAndLabels(Dataset):
 
 
     def __len__(self):
-        return len(self.im_files)
+        # return len(self.im_files)
+        return self.n
 
 
         # *************************************************************************************************
 
-    def create_labelout(self):
+    # def create_labelout(self):
+    #     r=self.r
+    #     space=self.space
+    #     # [batch_num, index, class, x, y, w, h]
+    #     labels_out = [None]*self.n
+    #     # lo = [None]*self.n
+    #     for index in range(self.n):
+    #         b = self.box[index].copy()
+    #         c = self.classes[index].copy()
+
+    #         b = np.array(b)
+    #         c = np.array(c).reshape((-1,1))
+
+    #         lab = np.concatenate([c, b], axis=-1)
+    #         label = torch.zeros(len(lab), 7)
+    #         label[:,2:] = torch.from_numpy(lab)
+    #         label[:,1] = index
+    #         labels_out[index] = label
+
+
+    #     self.lo = labels_out
+    #     labels_out = torch.from_numpy(np.concatenate(labels_out, axis=0))
+
+    #     return labels_out
+
+
+    def create_labelout(self, n):
         r=self.r
         space=self.space
         # [batch_num, index, class, x, y, w, h]
-        labels_out = [None]*self.n
-        # lo = [None]*self.n
-        for index in range(self.n):
+        labels_out = dict()
+        filtered_index = []
+
+        for index in range(n):
             b = self.box[index].copy()
             c = self.classes[index].copy()
 
             b = np.array(b)
-            c = np.array(c).reshape((-1,1))
+            c = np.array(c)
 
-            lab = np.concatenate([c, b], axis=-1)
-            label = torch.zeros(len(lab), 7)
-            label[:,2:] = torch.from_numpy(lab)
-            label[:,1] = index
-            labels_out[index] = label
+            b = b[c<2]
+            c = c[c<2]
 
+            if len(c)>0:
+                c = c.reshape((-1,1))
+                filtered_index.append(index)
 
-        self.lo = labels_out
-        labels_out = torch.from_numpy(np.concatenate(labels_out, axis=0))
+                lab = np.concatenate([c, b], axis=-1)
+                label = torch.zeros(len(lab), 7)
 
-        return labels_out
+                label[:,2:] = torch.from_numpy(lab)
+                label[:,1] = index
+                labels_out[index] = label
+
+        self.lo = list(labels_out.values())
+        labels_out = torch.from_numpy(np.concatenate(self.lo, axis=0))
+
+        # print(labels_out[0])
+        return labels_out, filtered_index
 
 
     def lookup(self, index):
@@ -740,8 +783,6 @@ class LoadImagesAndLabels(Dataset):
         image = [None]*r
         labels = [None]*r
 
-
-
         for i, ind in enumerate(neighborhood):
             label = self.lo[ind].clone()
             image[i] = self.imgs[ind].copy()
@@ -756,18 +797,23 @@ class LoadImagesAndLabels(Dataset):
             #     plt.show()
             # # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-            label = label[label[:,2]<2]
+            # label = label[label[:,2]<2]
 
-            if len(label)>0:
-                labels[i] = label
+            # if len(label)>0:
+            #     labels[i] = label
+            labels[i] = label
 
         (h0, w0) = self.shapes[index][::-1]
 
         image = np.concatenate(image,0)
-        labels = [l for l in labels if l is not None]
+        # labels = [l for l in labels if l is not None]
 
-        if len(labels)>0:
-            labels = torch.cat(labels,0)
+        # if len(labels)>0:
+        #     labels = torch.cat(labels,0)
+
+        if r==1:
+            labels = labels[0]
+
 
         shape = (256, 576)
         h, w = shape
