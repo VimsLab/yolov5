@@ -5,7 +5,7 @@ Validate a trained YOLOv5 detection model on a detection dataset
 Usage:
     $ python val.py --weights yolov5s.pt --data coco128.yaml --img 640
 
-python train.py --img 576 --hyp data/hyps/hyp.src.yaml --batch 16 --epoch 500 --data data/scr.yaml --cache --device cuda:0 --weights yolov5s.pt --r 1 --space 1
+python train.py --img 576 --hyp data/hyps/hyp.src.yaml --batch 16 --epoch 500 --data data/scr.yaml --cache --device cuda:0 --weights yolov5x.pt --r 1 --space 1
 python val.py --data data/scr.yaml --device=cuda:1 --batch 16 --weights runs/train/exp2/weights/best.pt --img 576 --conf-thres 0.001 --iou-thres 0.2 --r 1 --space 1
 
 Usage - formats:
